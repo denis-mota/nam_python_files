@@ -27,6 +27,7 @@ class AudioPlayer:
         self.chorus = ChorusEffect(self.sample_rate)
         self.drive = DriveEffect(self.sample_rate)
         self.nam_processor = None
+        self.nam_pedal_processor = None
         self.ir_processor = None
         self.delay = DelayEffect(self.sample_rate)
         self.reverb = ReverbEffect(self.sample_rate)
@@ -36,6 +37,7 @@ class AudioPlayer:
             'chorus': False,
             'drive': False,
             'nam': False,
+            'nam_pedal': False,
             'ir': False,
             'delay': False,
             'reverb': False
@@ -109,13 +111,19 @@ class AudioPlayer:
             print(f'Error loading IR file: {e}')
             return False
 
-    def load_nam_file(self, file_path):
+    def load_nam_file(self, file_path, is_pedal=False):
         try:
             # Load NAM file using C++ implementation
-            self.nam_processor = nam_binding.NAMProcessor(file_path)
-            self.nam_processor.reset(self.sample_rate, 1024)  # Initialize with current sample rate
-            self.add_effect('NAM', self.nam_processor)
-            print(f'NAM file loaded: {file_path}')
+            if is_pedal:
+                self.nam_pedal_processor = nam_binding.NAMProcessor(file_path)
+                self.nam_pedal_processor.reset(self.sample_rate, 1024)  # Initialize with current sample rate
+                self.add_effect('NAM Pedal', self.nam_pedal_processor)
+                print(f'NAM pedal file loaded: {file_path}')
+            else:
+                self.nam_processor = nam_binding.NAMProcessor(file_path)
+                self.nam_processor.reset(self.sample_rate, 1024)  # Initialize with current sample rate
+                self.add_effect('NAM', self.nam_processor)
+                print(f'NAM file loaded: {file_path}')
             return True
         except Exception as e:
             print(f'Error loading NAM file: {e}')
@@ -179,6 +187,8 @@ class AudioPlayer:
                 processed_audio = self.chorus.process(processed_audio)
             if self.effect_states['drive']:
                 processed_audio = self.drive.process(processed_audio)
+            if self.effect_states['nam_pedal'] and self.nam_pedal_processor:
+                processed_audio = self.nam_pedal_processor.process(processed_audio)
             if self.effect_states['nam'] and self.nam_processor:
                 processed_audio = self.nam_processor.process(processed_audio)
             if self.effect_states['ir'] and self.ir_processor:
@@ -298,171 +308,176 @@ class AudioPlayer:
             print('Monitoring stopped')
 
 def main():
+    # Initialize the audio player instance
+    player = AudioPlayer()
+    
     root = tk.Tk()
     root.title('Neural Amp Modeler')
-    root.geometry('600x800')
+    root.geometry('800x600')  # Wider window for horizontal layout
 
-    player = AudioPlayer()
+    # Create main horizontal frames
+    top_frame = tk.Frame(root)
+    top_frame.pack(fill=tk.X, padx=10, pady=5)
+
+    middle_frame = tk.Frame(root)
+    middle_frame.pack(fill=tk.X, padx=10, pady=5)
+
+    bottom_frame = tk.Frame(root)
+    bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
     # Create a frame for the signal chain display
-    chain_frame = tk.Frame(root, relief=tk.GROOVE, borderwidth=2)
-    chain_frame.pack(pady=10, padx=10, fill=tk.X)
+    chain_frame = tk.Frame(top_frame, relief=tk.GROOVE, borderwidth=2)
+    chain_frame.pack(side=tk.LEFT, pady=5, padx=5, fill=tk.X, expand=True)
     
     chain_label = tk.Label(chain_frame, text="Signal Chain", justify=tk.LEFT, font=('Arial', 10, 'bold'))
     chain_label.pack(pady=5)
 
-    # Create a frame for parameter controls
-    param_frame = tk.Frame(root, relief=tk.GROOVE, borderwidth=2)
-    param_frame.pack(pady=10, padx=10, fill=tk.X)
-    param_label = tk.Label(param_frame, text="Effect Parameters", font=('Arial', 10, 'bold'))
-    param_label.pack(pady=5)
+    # Control buttons frame
+    control_frame = tk.Frame(middle_frame)
+    control_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    # Dictionary to store parameter sliders
-    param_sliders = {}
-    current_effect = None
-
-    def clear_param_frame():
-        for widget in param_frame.winfo_children():
-            if widget != param_label:
-                widget.destroy()
-
-    def show_effect_parameters(effect_name):
-        nonlocal current_effect
-        current_effect = effect_name
-        clear_param_frame()
-
-        if not player.effect_states[effect_name]:
-            return
-
-        params = player.get_effect_parameters(effect_name)
-        param_sliders[effect_name] = {}
-
-        for param_name, param_info in params.items():
-            # Create frame for each parameter
-            slider_frame = tk.Frame(param_frame)
-            slider_frame.pack(pady=5, fill=tk.X, padx=10)
-
-            # Add label
-            label = tk.Label(slider_frame, text=param_info['label'])
-            label.pack(side=tk.TOP)
-
-            # Add control (slider or button)
-            if effect_name == 'delay' and param_name == 'delay_time':
-                # Create tap tempo button instead of slider
-                tap_button = tk.Button(
-                    slider_frame,
-                    text='Tap Tempo',
-                    command=lambda: [
-                        player.delay.tap_tempo(),
-                        update_delay_time_label()
-                    ]
-                )
-                tap_button.pack(side=tk.TOP, fill=tk.X, pady=5)
-                
-                # Add label to show current delay time
-                time_label = tk.Label(slider_frame, text=f'Current: {param_info["value"]:.2f}s')
-                time_label.pack(side=tk.TOP)
-                
-                def update_delay_time_label():
-                    time_label.config(text=f'Current: {player.delay.delay_time:.2f}s')
-                
-                # Store None for delay_time slider since we're using a button
-                slider = None
-            else:
-                # Regular parameter slider
-                slider = tk.Scale(
-                    slider_frame,
-                    from_=param_info['min'],
-                    to=param_info['max'],
-                    resolution=(param_info['max'] - param_info['min']) / 100,
-                    orient=tk.HORIZONTAL,
-                    length=200
-                )
-                slider.set(param_info['value'])
-                slider.pack(side=tk.TOP, fill=tk.X)
-
-            # Store slider reference (can be None for tap tempo)
-            param_sliders[effect_name][param_name] = slider
-
-            # Add value update callback only for actual sliders
-            if slider is not None:
-                def make_callback(effect=effect_name, param=param_name):
-                    def callback(value):
-                        player.update_effect_parameter(effect, param, float(value))
-                    return callback
-
-                slider.config(command=make_callback())
-
-    def update_chain_display():
-        active_effects = [name.upper() for name, state in player.effect_states.items() if state]
-        chain_text = " -> ".join(active_effects) if active_effects else "No active effects"
-        chain_label.config(text=f"Signal Chain:\n{chain_text}")
-        
-        # Update button appearances
-        for effect, button in effect_buttons.items():
-            if player.effect_states[effect]:
-                button.config(relief=tk.SUNKEN, bg='lightblue')
-                if effect == current_effect:
-                    show_effect_parameters(effect)
-            else:
-                button.config(relief=tk.RAISED, bg='SystemButtonFace')
-                if effect == current_effect:
-                    clear_param_frame()
-
-    # Effect toggle buttons frame
-    effects_frame = tk.Frame(root)
-    effects_frame.pack(pady=10)
-
-    # Create toggle buttons for each effect
-    effect_buttons = {}
-    for effect in ['chorus', 'drive', 'nam', 'ir', 'delay', 'reverb']:
-        def make_toggle_command(effect_name):
-            return lambda: [player.toggle_effect(effect_name), show_effect_parameters(effect_name), update_chain_display()]
-        
-        effect_buttons[effect] = tk.Button(
-            effects_frame,
-            text=f'{effect.upper()}',
-            command=make_toggle_command(effect),
-            width=10,
-            relief=tk.RAISED
-        )
-        effect_buttons[effect].pack(pady=2)
-
-    # File loading buttons
+    # File loading buttons in horizontal layout
     load_nam_button = tk.Button(
-        root,
+        control_frame,
         text='Load NAM Model',
         command=lambda: [player.load_file(), update_chain_display()]
     )
-    load_nam_button.pack(pady=10)
+    load_nam_button.pack(side=tk.LEFT, padx=5)
+
+    load_nam_pedal_button = tk.Button(
+        control_frame,
+        text='Load NAM Pedal',
+        command=lambda: [player.load_nam_file(filedialog.askopenfilename(
+            title='Select NAM Pedal file',
+            initialdir=player.last_directory,
+            filetypes=[('NAM Files', '*.nam')]
+        ), True), update_chain_display()]
+    )
+    load_nam_pedal_button.pack(side=tk.LEFT, padx=5)
 
     load_ir_button = tk.Button(
-        root,
+        control_frame,
         text='Load IR File',
         command=lambda: [player.load_file(), update_chain_display()]
     )
-    load_ir_button.pack(pady=10)
+    load_ir_button.pack(side=tk.LEFT, padx=5)
 
     play_button = tk.Button(
-        root,
+        control_frame,
         text='Play File',
         command=player.play
     )
-    play_button.pack(pady=10)
+    play_button.pack(side=tk.LEFT, padx=5)
 
     stop_button = tk.Button(
-        root,
+        control_frame,
         text='Stop',
         command=player.stop
     )
-    stop_button.pack(pady=10)
+    stop_button.pack(side=tk.LEFT, padx=5)
 
     monitor_button = tk.Button(
-        root,
+        control_frame,
         text='Start Guitar Input',
         command=player.start_monitoring
     )
-    monitor_button.pack(pady=10)
+    monitor_button.pack(side=tk.LEFT, padx=5)
+
+    # Effects frame
+    effects_frame = tk.Frame(middle_frame, relief=tk.GROOVE, borderwidth=2)
+    effects_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=5, padx=5)
+
+    effects_label = tk.Label(effects_frame, text="Effects", font=('Arial', 10, 'bold'))
+    effects_label.pack(pady=5)
+
+    # Effects buttons frame for horizontal layout
+    effects_buttons_frame = tk.Frame(effects_frame)
+    effects_buttons_frame.pack(fill=tk.X)
+
+    # Effect toggle buttons with visual feedback
+    effect_buttons = {}
+    selected_effect = tk.StringVar()
+
+    def on_effect_select(effect_name):
+        selected_effect.set(effect_name)
+        update_parameter_frame(effect_name)
+
+    effect_buttons = {
+        'chorus': tk.Button(effects_buttons_frame, text='Chorus',
+                          command=lambda: [player.toggle_effect('chorus'), update_effect_button_state('chorus'), on_effect_select('chorus')]),
+        'drive': tk.Button(effects_buttons_frame, text='Drive',
+                         command=lambda: [player.toggle_effect('drive'), update_effect_button_state('drive'), on_effect_select('drive')]),
+        'nam_pedal': tk.Button(effects_buttons_frame, text='NAM Pedal',
+                       command=lambda: [player.toggle_effect('nam_pedal'), update_effect_button_state('nam_pedal'), on_effect_select('nam_pedal')]),
+        'nam': tk.Button(effects_buttons_frame, text='NAM',
+                       command=lambda: [player.toggle_effect('nam'), update_effect_button_state('nam'), on_effect_select('nam')]),
+        'ir': tk.Button(effects_buttons_frame, text='IR',
+                      command=lambda: [player.toggle_effect('ir'), update_effect_button_state('ir'), on_effect_select('ir')]),
+        'delay': tk.Button(effects_buttons_frame, text='Delay',
+                         command=lambda: [player.toggle_effect('delay'), update_effect_button_state('delay'), on_effect_select('delay')]),
+        'reverb': tk.Button(effects_buttons_frame, text='Reverb',
+                          command=lambda: [player.toggle_effect('reverb'), update_effect_button_state('reverb'), on_effect_select('reverb')])
+    }
+
+    # Pack effect buttons horizontally
+    for button in effect_buttons.values():
+        button.pack(side=tk.LEFT, padx=5, pady=5)
+
+    # Create parameter frame in bottom section
+    param_frame = tk.Frame(bottom_frame, relief=tk.GROOVE, borderwidth=2)
+    param_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
+    param_label = tk.Label(param_frame, text="Effect Parameters", font=('Arial', 10, 'bold'))
+    param_label.pack(pady=5)
+
+    # Frame for parameter sliders
+    sliders_frame = tk.Frame(param_frame)
+    sliders_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+
+    def update_parameter_frame(effect_name):
+        # Clear existing sliders
+        for widget in sliders_frame.winfo_children():
+            widget.destroy()
+
+        # Get parameters for the selected effect
+        params = player.get_effect_parameters(effect_name.lower())
+        if not params:
+            return
+
+        # Create sliders for each parameter
+        for param_name, param_info in params.items():
+            slider_frame = tk.Frame(sliders_frame)
+            slider_frame.pack(fill=tk.X, pady=2)
+
+            label = tk.Label(slider_frame, text=param_info['label'], width=15, anchor='w')
+            label.pack(side=tk.LEFT)
+
+            slider = tk.Scale(slider_frame, from_=param_info['min'], to=param_info['max'],
+                            orient=tk.HORIZONTAL, resolution=0.01,
+                            command=lambda value, e=effect_name.lower(), p=param_name:
+                            player.update_effect_parameter(e, p, float(value)))
+            slider.set(param_info['value'])
+            slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Add tap tempo button for delay effect
+        if effect_name.lower() == 'delay':
+            tap_frame = tk.Frame(sliders_frame)
+            tap_frame.pack(fill=tk.X, pady=2)
+            tap_button = tk.Button(tap_frame, text='Tap Tempo', command=player.delay.tap_tempo)
+            tap_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+    def update_effect_button_state(effect_name):
+        button = effect_buttons[effect_name]
+        if player.effect_states[effect_name]:
+            button.configure(relief=tk.SUNKEN, bg='lightblue')
+        else:
+            button.configure(relief=tk.RAISED, bg='SystemButtonFace')
+
+    def update_chain_display():
+        # Add chain display update logic here if needed
+        pass
+
+    # Show initial parameters for chorus effect
+    on_effect_select('chorus')
 
     root.mainloop()
 
