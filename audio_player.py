@@ -313,7 +313,7 @@ def main():
     
     root = tk.Tk()
     root.title('Neural Amp Modeler')
-    root.geometry('800x600')  # Wider window for horizontal layout
+    root.geometry('1000x600')  # Wider window for horizontal layout
 
     # Create main horizontal frames
     top_frame = tk.Frame(root)
